@@ -364,21 +364,26 @@ ttfc_hist.record(0.310, attributes={
     "gen_ai.request.model": "gpt-4o",
     "server.address": "api.openai.com"
 })`,
-          collectorYaml: `# OTel Collector: Pass client histograms through without overwriting gen_ai.provider.name
-# Note: Bucket boundaries are defined in the SDK View (above), not by the Collector attributes processor.
+          collectorYaml: `# OTel Collector: pass-through. Never overwrite gen_ai.* attributes here.
+# Histogram buckets are set in the SDK (explicit_bucket_boundaries_advisory), not in the Collector.
 receivers:
   otlp:
     protocols:
       grpc: { endpoint: "0.0.0.0:4317" }
 
 processors:
-  batch:
-    send_batch_size: 1024
-    timeout: 5s
+  batch: {}
 
 exporters:
   otlphttp/prometheus:
-    endpoint: "http://prometheus:9090/api/v1/otlp"`
+    endpoint: "http://prometheus:9090/api/v1/otlp"  # Prometheus needs --web.enable-otlp-receiver
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/prometheus]`
         },
         {
           id: 'token_counters',
@@ -389,35 +394,35 @@ exporters:
           issue: 'Older gateways (e.g., Envoy AI Gateway) and older SDKs may still emit the legacy gen_ai.client.token.usage histogram; use monotonic counters for accurate FinOps billing.',
           refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md',
           refLabel: 'gen-ai-metrics.md (Token Counters)',
-          sdkCode: `# Upstream OTel package is opentelemetry-instrumentation-openai-v2
-# (Note: Traceloop/OpenLLMetry uses opentelemetry-instrumentation-openai and OpenInference uses openinference-instrumentation-openai)
+          sdkCode: `# Option A (preferred): let the instrumentation emit these counters.
+#   pip install opentelemetry-instrumentation-openai-v2   (upstream package)
+#   Do NOT also add manual counters below, or tokens are double-counted.
+#   (Traceloop uses opentelemetry-instrumentation-openai; OpenInference uses openinference-instrumentation-openai.)
+#
+# Option B: manual counters for a custom client or gateway.
 from opentelemetry import metrics
 
 meter = metrics.get_meter("com.acme.genai.app", "0.1.0")
 
-input_tokens_counter = meter.create_counter(
-    name="gen_ai.client.inference.usage.input_tokens",
-    unit="{token}",
-    description="Total input tokens consumed"
-)
-output_tokens_counter = meter.create_counter(
-    name="gen_ai.client.inference.usage.output_tokens",
-    unit="{token}",
-    description="Total output tokens generated"
-)
+input_tokens = meter.create_counter(
+    "gen_ai.client.inference.usage.input_tokens", unit="{token}",
+    description="Input tokens consumed")
+output_tokens = meter.create_counter(
+    "gen_ai.client.inference.usage.output_tokens", unit="{token}",
+    description="Output tokens generated")
 
-attrs = {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "openai", "gen_ai.request.model": "gpt-4o"}
-input_tokens_counter.add(response.usage.prompt_tokens, attributes=attrs)
-output_tokens_counter.add(response.usage.completion_tokens, attributes=attrs)`,
-          collectorYaml: `# OTel Collector: Redact opt-in message attributes if capture_content is enabled in staging
-# Note: Content lives on gen_ai.input.messages / gen_ai.output.messages (keep OFF in production!)
-processors:
-  transform/redact_messages:
-    trace_statements:
-      - context: span
-        statements:
-          - replace_pattern(attributes["gen_ai.input.messages"], "\\\\b\\\\d{3}-\\\\d{2}-\\\\d{4}\\\\b", "[REDACTED_SSN]")
-          - replace_pattern(attributes["gen_ai.output.messages"], "\\\\b\\\\d{3}-\\\\d{2}-\\\\d{4}\\\\b", "[REDACTED_SSN]")`
+def record_usage(usage, model):
+    attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": model,
+        "gen_ai.token.modality": "text",  # Required by spec; use "unknown" if it cannot be determined
+    }
+    input_tokens.add(usage.prompt_tokens, attrs)
+    output_tokens.add(usage.completion_tokens, attrs)`,
+          collectorYaml: `# No Collector transform needed: usage counters flow through the same metrics pipeline as above.
+# Do not map the legacy gen_ai.client.token.usage histogram into these counters.
+# Message-content redaction lives in the Governance card.`
         },
         {
           id: 'agent_resilience',
@@ -434,24 +439,30 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 tracer = trace.get_tracer("com.acme.genai.agent", "0.1.0")
 meter = metrics.get_meter("com.acme.genai.agent", "0.1.0")
 
-agent_infer_calls = meter.create_histogram("gen_ai.invoke_agent.inference_calls", unit="{call}")
+agent_infer_calls = meter.create_histogram(
+    "gen_ai.invoke_agent.inference_calls", unit="{inference_call}",
+    explicit_bucket_boundaries_advisory=[1, 2, 4, 8, 16, 32, 64, 128])
 fallback_counter = meter.create_counter("app.llm.fallback.count", unit="{fallback}")
 
-with tracer.start_as_current_span("invoke_agent incident_triager", kind=SpanKind.INTERNAL) as span:
+NAME = "incident_triager"
+with tracer.start_as_current_span(f"invoke_agent {NAME}", kind=SpanKind.INTERNAL) as span:
     span.set_attribute("gen_ai.operation.name", "invoke_agent")
-    span.set_attribute("gen_ai.agent.name", "incident_triager")
-    span.set_attribute("gen_ai.agent.version", "2.1.0") # Use version, not custom agent.id
+    span.set_attribute("gen_ai.agent.name", NAME)
+    span.set_attribute("gen_ai.agent.version", "2.1.0")  # version, not a custom agent.id
+    run = AgentRun()  # your loop increments run.inference_calls on every model call
     try:
-        calls = execute_agent_loop()
-        agent_infer_calls.record(calls, {"gen_ai.agent.name": "incident_triager"})
+        execute_agent_loop(run)
     except TimeoutError:
-        # error.type = actual error class; fallback recorded as custom app.* outcome
-        span.set_attribute("error.type", "timeout")
-        span.set_attribute("app.llm.fallback", True)
+        span.set_attribute("error.type", "timeout")   # real failure class
+        span.set_attribute("app.llm.fallback", True)  # fallback is a custom outcome
         span.set_status(Status(StatusCode.ERROR, "Model timeout; served deterministic runbook"))
-        fallback_counter.add(1, {"gen_ai.agent.name": "incident_triager", "error.type": "timeout"})`,
-          collectorYaml: `# Alert on gen_ai.invoke_agent.inference_calls in Prometheus for runaway loops.
-# Use Collector tail_sampling strictly for trace storage retention on errors/high-latency:
+        fallback_counter.add(1, {"gen_ai.agent.name": NAME, "error.type": "timeout"})
+    finally:
+        # finally: timed-out runaway loops are still counted (check required attrs in the spec)
+        agent_infer_calls.record(run.inference_calls,
+            {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": NAME})`,
+          collectorYaml: `# Alert on gen_ai.invoke_agent.inference_calls (p95 / max) in Prometheus for runaway loops.
+# tail_sampling is only for trace RETENTION (errors + fallbacks):
 processors:
   tail_sampling:
     decision_wait: 10s
@@ -461,7 +472,15 @@ processors:
         status_code: { status_codes: [ERROR] }
       - name: retain-fallback-traces
         type: boolean_attribute
-        boolean_attribute: { key: "app.llm.fallback", value: true }`
+        boolean_attribute: { key: "app.llm.fallback", value: true }
+  batch: {}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [otlp/traces]   # define your trace exporter`
         }
       ]
     },
@@ -477,15 +496,15 @@ processors:
           desc: 'Native Prometheus histograms exposed directly by self-hosted vLLM model servers for scheduler queue wait and server TTFT.',
           why: 'Isolates whether latency is caused by requests waiting in the scheduler queue (num_requests_waiting) or slow prefill compute.',
           issue: 'vLLM exposes native vllm:* metrics, not gen_ai.server.*. Also note: vllm:time_in_queue_requests was deprecated in vLLM 0.8+ in favor of vllm:request_queue_time_seconds.',
-          refUrl: 'https://docs.vllm.ai/en/latest/serving/metrics.html',
+          refUrl: 'https://docs.vllm.ai/en/latest/design/metrics.html',
           refLabel: 'vLLM Production Metrics Docs',
           sdkCode: `# vLLM natively exposes /metrics in Prometheus format (no app code instrumentation).
-# Key native metrics exposed on port 8000:
-# - vllm:num_requests_waiting (Gauge: current queue depth)
-# - vllm:request_queue_time_seconds_bucket (Histogram: time spent waiting in queue)
+# Key native metrics on port 8000 (names vary by vLLM version; inspect your own /metrics):
+# - vllm:num_requests_waiting (Gauge: queue depth)
+# - vllm:request_queue_time_seconds_bucket (Histogram: time waiting in queue)
 # - vllm:time_to_first_token_seconds_bucket (Histogram: server-side TTFT)
-# - vllm:gpu_cache_usage_perc (Gauge: KV-cache saturation 0.0-1.0)`,
-          collectorYaml: `# OTel Collector: Scrape native vLLM metrics as-is (do not invent fake regexes)
+# - vllm:kv_cache_usage_perc (Gauge: KV-cache fraction 0-1; older versions: vllm:gpu_cache_usage_perc)`,
+          collectorYaml: `# OTel Collector: scrape native vLLM metrics as-is
 receivers:
   prometheus/vllm:
     config:
@@ -496,8 +515,15 @@ receivers:
             - targets: ["vllm-svc.serving.svc.cluster.local:8000"]
           metric_relabel_configs:
             - source_labels: [__name__]
-              regex: "vllm:(num_requests_waiting|request_queue_time_seconds.*|time_to_first_token_seconds.*|gpu_cache_usage_perc)"
-              action: keep`
+              regex: "vllm:(num_requests_waiting|request_queue_time_seconds.*|time_to_first_token_seconds.*|kv_cache_usage_perc|gpu_cache_usage_perc)"
+              action: keep
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus/vllm]
+      processors: [batch]
+      exporters: [otlphttp/prometheus]   # same exporter and batch as the Request Plane config`
         },
         {
           id: 'dcgm_gpu',
@@ -522,7 +548,7 @@ receivers:
     "error.type": "uncorrected" # Spec value: corrected | uncorrected
   }
 }`,
-          collectorYaml: `# OTel Collector: Keep DCGM native, OR apply exact unit scaling if mapping to hw.gpu.*
+          collectorYaml: `# OTel Collector: keep DCGM native. Map to hw.gpu.* ONLY for cross-vendor portability, with scaling.
 receivers:
   prometheus/dcgm:
     config:
@@ -532,15 +558,36 @@ receivers:
             - targets: ["dcgm-exporter.gpu-operator.svc:9400"]
 
 processors:
-  # Optional: Only map to hw.gpu.* if cross-vendor portability is required, WITH unit conversion!
   transform/dcgm_to_hw_semconv:
     metric_statements:
+      # 1) scale values first (FB_USED is MiB; GPU_UTIL is 0-100)
       - context: datapoint
         conditions: [metric.name == "DCGM_FI_DEV_FB_USED"]
         statements:
-          - set(metric.name, "hw.gpu.memory.usage")
-          - set(metric.unit, "By")
-          - set(value_int, Int(value_double * 1048576.0)) # Convert MiB -> Bytes`
+          - set(value_double, value_double * 1048576.0)
+      - context: datapoint
+        conditions: [metric.name == "DCGM_FI_DEV_GPU_UTIL"]
+        statements:
+          - set(value_double, value_double / 100.0)
+      # 2) then rename, set units, fix instrument type (hw.gpu.memory.usage is an UpDownCounter)
+      - context: metric
+        conditions: [name == "DCGM_FI_DEV_FB_USED"]
+        statements:
+          - set(name, "hw.gpu.memory.usage")
+          - set(unit, "By")
+          - convert_gauge_to_sum("cumulative", false)  # verify against your Collector version
+      - context: metric
+        conditions: [name == "DCGM_FI_DEV_GPU_UTIL"]
+        statements:
+          - set(name, "hw.gpu.utilization")
+          - set(unit, "1")
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus/dcgm]
+      processors: [transform/dcgm_to_hw_semconv, batch]
+      exporters: [otlphttp/prometheus]`
         }
       ]
     },
@@ -558,33 +605,31 @@ processors:
           issue: 'Put the verdict ("hallucinated" / "faithful") in gen_ai.evaluation.score.label. Leave error.type UNSET unless the evaluation judge itself crashed or timed out!',
           refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-events.md',
           refLabel: 'gen-ai-events.md (Development)',
-          sdkCode: `# Async Evaluator Worker: Parent event to the original inference span context
+          sdkCode: `# Async evaluator worker. At inference time, store the response id and span context:
+#   ctx = trace.get_current_span().get_span_context()   # keep ctx.trace_id / span_id / trace_flags
+# NOTE: opentelemetry._events is a pre-stable module; if your SDK lacks it, emit the same event via the Logs API.
 from opentelemetry._events import get_event_logger, Event
 
 event_logger = get_event_logger("com.acme.genai.evaluator", "0.1.0")
 
-# Case 1: Evaluation succeeded, and flagged a hallucination (error.type is NOT set!)
-event_logger.emit(Event(
-    name="gen_ai.evaluation.result",
-    attributes={
-        "gen_ai.evaluation.name": "hallucination",
-        "gen_ai.evaluation.score.value": 0.15,
-        "gen_ai.evaluation.score.label": "hallucinated",
-        "gen_ai.evaluation.explanation": "Claim unverified by retrieved context chunks.",
-        "gen_ai.response.id": "chatcmpl-89a7c"
-    }
-))
+def emit_eval(ctx, response_id, **attrs):
+    event_logger.emit(Event(
+        name="gen_ai.evaluation.result",
+        trace_id=ctx.trace_id, span_id=ctx.span_id, trace_flags=ctx.trace_flags,  # parent to the inference span
+        attributes={"gen_ai.evaluation.name": "hallucination",
+                    "gen_ai.response.id": response_id, **attrs},               # correlation fallback
+    ))
 
-# Case 2: The Judge LLM itself timed out (error.type IS set)
-event_logger.emit(Event(
-    name="gen_ai.evaluation.result",
-    attributes={
-        "gen_ai.evaluation.name": "hallucination",
-        "error.type": "judge_timeout"
-    }
-))`,
-          collectorYaml: `# Note: Tail-sampling only applies to traces, NOT logs/events!
-# Sample at the evaluator worker level and aggregate scores in your backend (ClickHouse/ES).
+# Case 1: judge succeeded and flagged a hallucination (error.type NOT set)
+emit_eval(ctx, "chatcmpl-89a7c", **{
+    "gen_ai.evaluation.score.value": 0.15,
+    "gen_ai.evaluation.score.label": "hallucinated",
+    "gen_ai.evaluation.explanation": "Claim unverified by retrieved context chunks."})
+
+# Case 2: the judge itself timed out (error.type IS set)
+emit_eval(ctx, "chatcmpl-89a7c", **{"error.type": "judge_timeout"})`,
+          collectorYaml: `# Tail-sampling applies to traces, NOT logs/events.
+# Sample at the evaluator worker and aggregate scores in your backend (ClickHouse/ES).
 processors:
   batch/eval_logs:
     send_batch_size: 512
@@ -613,17 +658,28 @@ service:
           issue: 'Pin semconv and instrumentation library versions, keep raw prompt capture OFF in production by default, and never let the Collector invent semantic attributes.',
           refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai',
           refLabel: 'open-telemetry/semantic-conventions-genai',
-          sdkCode: `# 1. Pin instrumentation packages in requirements.txt:
-# opentelemetry-sdk==1.30.0
-# opentelemetry-semantic-conventions==0.51b0
-# opentelemetry-instrumentation-openai-v2==2.1b0
-
-# 2. Keep message content capture OFF in production (default) to prevent PII leaks:
-# export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`,
-          collectorYaml: `# Cross-Cutting Collector Checklist:
+          sdkCode: `# 1. Pin EXACT versions of SDK, semantic-conventions and instrumentation.
+#    Choose releases that postdate gen_ai.provider.name and gen_ai.client.inference.usage.*
+#    (older pins emit the legacy gen_ai.system / gen_ai.client.token.usage names). Freeze what you test:
+#      pip freeze | grep -i opentelemetry > requirements.lock
+#
+# 2. Opt in to the latest GenAI conventions (Python contrib mechanism; check your package README):
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+#
+# 3. Message content capture stays OFF in production (spec default is NO_CONTENT):
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT=NO_CONTENT`,
+          collectorYaml: `# Cross-cutting Collector checklist:
 # 1. Do NOT blanket-overwrite gen_ai.provider.name in the Collector.
-# 2. Do NOT rename DCGM / vLLM metrics to OTel names without scaling units (MiB -> By, % -> ratio).
-# 3. Convert high-volume evaluation events into aggregated backend metrics rather than tail-sampling logs.`
+# 2. Do NOT rename DCGM / vLLM metrics to OTel names without scaling units (MiB -> By, 0-100 -> 0-1).
+# 3. Aggregate high-volume evaluation events in the backend; do not tail-sample logs.
+# 4. Redact content ONLY if capture is enabled (staging):
+processors:
+  transform/redact_messages:
+    trace_statements:
+      - context: span
+        statements:
+          - replace_pattern(attributes["gen_ai.input.messages"], "\\\\b\\\\d{3}-\\\\d{2}-\\\\d{4}\\\\b", "[REDACTED_SSN]")
+          - replace_pattern(attributes["gen_ai.output.messages"], "\\\\b\\\\d{3}-\\\\d{2}-\\\\d{4}\\\\b", "[REDACTED_SSN]")`
         }
       ]
     }
