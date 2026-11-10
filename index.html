@@ -3,29 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LLM Observability Architecture</title>
+  <title>GenAI Production Telemetry Map — OTel Spec</title>
   <style>
     :root {
       --ff-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      --ff-mono: 'Courier New', Courier, monospace;
+      --ff-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
       
-      --surface: #ffffff;
-      --surface-dim: #f3f4f6;
-      --surface-container: #e5e7eb;
-      --on-surface: #111827;
-      --on-surface-variant: #4b5563;
-      --stroke: #d1d5db;
+      --bg-main: #090d16;
+      --surface: #111827;
+      --surface-dim: #1e293b;
+      --surface-container: #334155;
       
-      --color-traffic: #f59e0b; /* Amber */
-      --color-hw: #3b82f6;      /* Blue */
-      --color-app: #8b5cf6;     /* Purple */
-      --color-quality: #10b981; /* Green */
+      --on-surface: #f8fafc;
+      --on-surface-variant: #94a3b8;
+      --stroke: #1e293b;
+      
+      /* Luminous Dark Palette */
+      --color-traffic: #00f0ff; /* Luminous Turquoise / Cyan */
+      --color-hw: #39ff14;      /* Luminous Green */
+      --color-app: #ff8c00;     /* Luminous Orange */
+      --color-quality: #d946ef; /* Luminous Purple */
     }
+
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      padding: 20px;
-      background-color: #f9fafb;
+      padding: 24px 16px;
+      background-color: var(--bg-main);
       font-family: var(--ff-sans);
       color: var(--on-surface);
       display: flex;
@@ -34,32 +39,56 @@
 
     .widget-container {
       width: 100%;
-      max-width: 950px;
+      max-width: 980px;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 18px;
     }
 
     .header {
       background: var(--surface);
       padding: 20px 24px;
       border-radius: 12px;
-      border: 1px solid var(--stroke);
-      border-left: 4px solid var(--color-app);
-      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      border: 1px solid var(--surface-container);
+      border-left: 4px solid var(--color-traffic);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
     }
     
-    .header h2 { margin: 0 0 8px 0; font-size: 24px; font-weight: 600; color: #1f2937; }
-    .header p { margin: 0; color: var(--on-surface-variant); font-size: 15px; }
-    .header .quote { margin-top: 12px; font-style: italic; font-weight: 500; color: #111827; }
+    .header h2 {
+      margin: 0 0 6px 0;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--on-surface);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+    }
+    .header p { margin: 0; color: var(--on-surface-variant); font-size: 14px; }
+    
+    .spec-pill {
+      font-family: var(--ff-mono);
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: rgba(0, 240, 255, 0.1);
+      border: 1px solid var(--color-traffic);
+      color: var(--color-traffic);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .spec-pill:hover { background: rgba(0, 240, 255, 0.2); }
 
     /* SVG Canvas */
     .viewport {
       background: var(--surface);
-      border: 1px solid var(--stroke);
+      border: 1px solid var(--surface-container);
       border-radius: 12px;
-      padding: 20px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+      padding: 16px 20px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
       overflow: hidden;
     }
 
@@ -70,56 +99,104 @@
       user-select: none;
     }
 
-    /* Node Styles */
     .node { cursor: pointer; transition: all 0.2s ease; }
-    .node:hover rect { filter: brightness(0.96); }
-    .node.selected rect { stroke-width: 3px; filter: brightness(0.92); }
-    .node-text-title { font-size: 14px; font-weight: 600; fill: var(--on-surface); text-anchor: middle; pointer-events: none; }
-    .node-text-sub { font-size: 12px; fill: var(--on-surface-variant); text-anchor: middle; pointer-events: none; }
+    .node:hover rect { filter: brightness(1.25); }
+    .node.selected rect { stroke-width: 2.8px; filter: drop-shadow(0 0 8px rgba(255,255,255,0.18)); }
+    .node-text-title { font-size: 13.5px; font-weight: 700; fill: var(--on-surface); text-anchor: middle; pointer-events: none; }
+    .node-text-sub { font-size: 11.5px; fill: var(--on-surface-variant); text-anchor: middle; pointer-events: none; font-family: var(--ff-mono); }
 
-    /* Edges and Particles */
-    .edge-path { fill: none; stroke: #9ca3af; stroke-width: 2px; }
-    .edge-label-bg { fill: var(--surface); stroke: var(--stroke); rx: 4px; }
-    .edge-label { font-size: 11px; font-weight: 500; fill: var(--on-surface-variant); text-anchor: middle; font-family: var(--ff-mono); pointer-events: none; }
+    .edge-path { fill: none; stroke: #475569; stroke-width: 2px; stroke-dasharray: 4 4; }
     .particle { pointer-events: none; }
+
+    /* Sub-navigation for Metrics */
+    .metrics-nav {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 14px 18px;
+      background: var(--surface);
+      border: 1px solid var(--surface-container);
+      border-radius: 10px;
+    }
+    .metrics-nav-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--on-surface-variant);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-right: 4px;
+    }
+    .metric-chip {
+      padding: 7px 15px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: var(--ff-mono);
+      cursor: pointer;
+      background: var(--surface-dim);
+      border: 1px solid var(--surface-container);
+      color: var(--on-surface-variant);
+      transition: all 0.18s ease;
+    }
+    .metric-chip:hover { color: var(--on-surface); border-color: #64748b; }
+    .metric-chip.active { color: #090d16; font-weight: 700; border-color: transparent; }
 
     /* Details Card */
     .details-card {
       background: var(--surface);
-      border: 1px solid var(--stroke);
+      border: 1px solid var(--surface-container);
       border-radius: 12px;
       padding: 24px;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      min-height: 220px;
+      gap: 18px;
     }
 
     .details-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      border-bottom: 1px solid var(--surface-container);
-      padding-bottom: 12px;
+      flex-wrap: wrap;
+      gap: 10px;
+      border-bottom: 1px solid var(--surface-dim);
+      padding-bottom: 14px;
     }
 
-    .details-title { font-size: 18px; font-weight: 600; margin: 0; }
+    .details-title-group { display: flex; flex-direction: column; gap: 4px; }
+    .details-title { font-size: 19px; font-weight: 700; margin: 0; color: var(--on-surface); }
+    .otel-instrument-name {
+      font-family: var(--ff-mono);
+      font-size: 12.5px;
+      color: var(--color-traffic);
+    }
+
     .badge {
-      padding: 4px 12px;
+      padding: 5px 12px;
       border-radius: 9999px;
-      font-size: 12px;
-      font-weight: 600;
-      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      color: #090d16;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
 
-    .details-desc { margin: 0; font-size: 14px; line-height: 1.5; color: var(--on-surface); }
-    .details-desc strong { color: #111827; }
+    .details-desc {
+      margin: 0;
+      font-size: 14.5px;
+      line-height: 1.5;
+      color: var(--on-surface);
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.03);
+      border-left: 3px solid #64748b;
+      border-radius: 4px;
+    }
     
     .metrics-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
     }
 
     .metric-box { 
@@ -127,298 +204,685 @@
       flex-direction: column; 
       gap: 6px; 
       background: var(--surface-dim); 
-      padding: 12px; 
+      padding: 14px 16px; 
       border-radius: 8px;
-      border: 1px solid var(--stroke);
+      border: 1px solid var(--surface-container);
     }
-    .metric-label { font-size: 11px; text-transform: uppercase; font-weight: 700; color: #4b5563; letter-spacing: 0.05em; }
-    .metric-value { font-size: 13px; line-height: 1.4; color: var(--on-surface); }
+    .metric-label { font-size: 11px; text-transform: uppercase; font-weight: 700; color: var(--on-surface-variant); letter-spacing: 0.06em; }
+    .metric-value { font-size: 13.5px; line-height: 1.5; color: var(--on-surface); }
 
-    .keyword-block {
-      background: #1f2937;
-      color: #e5e7eb;
-      padding: 16px;
-      border-radius: 8px;
-      font-size: 13px;
-      line-height: 1.5;
-      margin: 0;
+    /* Code Tabs & Snippet Area */
+    .code-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
-    .keyword-title {
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .code-tabs {
+      display: flex;
+      gap: 6px;
+    }
+    .code-tab {
+      padding: 6px 12px;
+      font-size: 12px;
       font-family: var(--ff-mono);
       font-weight: 600;
-      color: #93c5fd;
-      margin-bottom: 4px;
-      display: block;
+      background: var(--surface-dim);
+      color: var(--on-surface-variant);
+      border: 1px solid var(--surface-container);
+      border-radius: 6px;
+      cursor: pointer;
     }
+    .code-tab.active {
+      background: var(--surface-container);
+      color: var(--on-surface);
+      border-color: var(--color-traffic);
+    }
+    .ref-link {
+      font-family: var(--ff-mono);
+      font-size: 11.5px;
+      color: var(--color-app);
+      text-decoration: none;
+    }
+    .ref-link:hover { text-decoration: underline; }
 
-    /* Legend */
-    .legend-bar {
-      display: flex;
-      justify-content: center;
-      gap: 24px;
-      margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px dashed var(--stroke);
-      font-size: 13px;
-      font-weight: 500;
+    .keyword-block {
+      background: #05080f;
+      color: #e2e8f0;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      margin: 0;
+      font-family: var(--ff-mono);
+      border: 1px solid var(--surface-container);
+      overflow-x: auto;
+      white-space: pre;
     }
-    .legend-item { display: flex; align-items: center; gap: 8px; color: var(--on-surface-variant); cursor: pointer;}
-    .legend-item:hover { color: var(--on-surface); }
-    .legend-swatch { width: 14px; height: 14px; border-radius: 4px; }
   </style>
 </head>
 <body>
 
 <div class="widget-container">
   <div class="header">
-    <h2>The Practical LLM Telemetry Map</h2>
-    <p>A breakdown of the 4 critical observability layers required to move GenAI from a local POC to a resilient enterprise deployment.</p>
-    <div class="quote">"The difference between a demo and a production GenAI system is not the model."</div>
+    <div>
+      <h2>GenAI Production Telemetry Map</h2>
+      <p>Aligned with OpenTelemetry GenAI &amp; Hardware Semantic Conventions (v1.42+ / 2026 Spec)</p>
+    </div>
+    <a class="spec-pill" href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">
+      repo: open-telemetry/semantic-conventions-genai ↗
+    </a>
   </div>
 
   <div class="viewport">
-    <svg viewBox="0 0 900 280" id="diagram">
+    <svg viewBox="0 0 920 185" id="diagram">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#9ca3af" />
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
         </marker>
       </defs>
-      
       <g id="edges-layer"></g>
       <g id="particles-layer"></g>
       <g id="nodes-layer"></g>
     </svg>
-
-    <div class="legend-bar">
-      <div class="legend-item" onclick="selectNode('traffic')"><div class="legend-swatch" style="background: var(--color-traffic)"></div> 1. Traffic</div>
-      <div class="legend-item" onclick="selectNode('hardware')"><div class="legend-swatch" style="background: var(--color-hw)"></div> 2. Hardware</div>
-      <div class="legend-item" onclick="selectNode('app')"><div class="legend-swatch" style="background: var(--color-app)"></div> 3. App-Side</div>
-      <div class="legend-item" onclick="selectNode('quality')"><div class="legend-swatch" style="background: var(--color-quality)"></div> 4. Quality</div>
-    </div>
   </div>
 
+  <!-- Dynamic Metrics Sub-Navigation -->
+  <div class="metrics-nav">
+    <div class="metrics-nav-label">1. Click Layer Above &rarr; 2. Inspect Metric:</div>
+    <div id="metrics-chips" style="display: flex; gap: 8px; flex-wrap: wrap;"></div>
+  </div>
+
+  <!-- Inspection Details Card -->
   <div class="details-card" id="details">
     <div class="details-header">
-      <h3 class="details-title" id="d-title">Select a telemetry layer</h3>
-      <span class="badge" id="d-badge" style="background: #9ca3af;">Layer</span>
+      <div class="details-title-group">
+        <h3 class="details-title" id="d-title">Metric Name</h3>
+        <span class="otel-instrument-name" id="d-instrument">otel.instrument.name</span>
+      </div>
+      <span class="badge" id="d-badge">Layer</span>
     </div>
     
-    <p class="details-desc" id="d-desc"><strong>What it measures:</strong> Click a node above to view its metrics.</p>
+    <p class="details-desc" id="d-desc">One-line description of the metric.</p>
     
-    <div class="metrics-grid" id="d-metrics">
+    <div class="metrics-grid">
       <div class="metric-box">
-        <span class="metric-label">Why it matters</span>
+        <span class="metric-label">Why It Is Monitored</span>
         <span class="metric-value" id="d-matters">-</span>
       </div>
       <div class="metric-box">
-        <span class="metric-label">What goes wrong if ignored</span>
-        <span class="metric-value" id="d-wrong">-</span>
+        <span class="metric-label">Production Issue It Identifies</span>
+        <span class="metric-value" id="d-issue">-</span>
       </div>
     </div>
 
-    <div id="keyword-container" style="display: none; margin-top: 8px;">
-      <div class="metric-label" style="margin-bottom: 8px;">Technical Breakdown</div>
-      <div class="keyword-block" id="d-keywords"></div>
+    <div class="code-section">
+      <div class="code-header">
+        <div class="code-tabs">
+          <button class="code-tab active" id="tab-collector" onclick="switchCodeTab('collector')">OTel Collector YAML</button>
+          <button class="code-tab" id="tab-sdk" onclick="switchCodeTab('sdk')">Python OTel SDK / Auto-Instrumentation</button>
+        </div>
+        <a class="ref-link" id="d-ref" href="#" target="_blank" rel="noopener">Spec Reference ↗</a>
+      </div>
+      <pre class="keyword-block" id="d-code"></pre>
     </div>
   </div>
 </div>
 
 <script>
-  // Node Definitions based on the 4 pillars
-  const NODES = [
-    { id: 'traffic', x: 40, y: 100, w: 160, h: 70, color: 'var(--color-traffic)', title: 'Traffic & Latency', sub: 'Network & Queues', type: 'Layer 1', 
-      desc: 'Request volume, queue depth, time-to-first-token (TTFT), end-to-end latency, and error rates.', 
-      matters: 'User-facing bottlenecks almost always show up here first before anything else.',
-      wrong: 'You see rising latency and assume the model is slow, when the real problem is concurrency limits or a saturated queue while actual TTFT stays flat. Users experience delays long before your model metrics move.', 
-      keywords: '<span class="keyword-title">TTFT (Time-To-First-Token)</span>The exact fraction of a second it takes for the AI to start typing the very first word of its response.<br><br><span class="keyword-title">Queue Depth</span>How many user requests are stuck waiting in line before the GPU is free to process them.' },
-      
-    { id: 'hardware', x: 260, y: 100, w: 160, h: 70, color: 'var(--color-hw)', title: 'Hardware Saturation', sub: 'GPU & Host Health', type: 'Layer 2', 
-      desc: 'GPU utilization (especially NVIDIA), CPU, container and host metrics, Docker/VM pressure.', 
-      matters: 'Token generation speed is tightly coupled to whether the model still fits in VRAM or has spilled into system RAM.',
-      wrong: 'Thermal throttling, disk saturation, or silent VRAM overflow quietly destroy throughput. You start blaming the model or the prompt when the physical host server is the actual constraint.', 
-      keywords: '<span class="keyword-title">VRAM (Video RAM)</span>The ultra-fast memory on a graphics card where the AI model lives. If it fills up, the system crashes or slows to a crawl.<br><br><span class="keyword-title">Thermal Throttling</span>When a computer chip gets dangerously hot and intentionally slows itself down to prevent melting.' },
-      
-    { id: 'app', x: 480, y: 100, w: 160, h: 70, color: 'var(--color-app)', title: 'App-Side Reliability', sub: 'Agent & Orchestration', type: 'Layer 3', 
-      desc: 'Agent call success/failure, fallback rates, token usage patterns, and error rates at the application layer.', 
-      matters: 'This is a measure of true system resilience, not just model health.',
-      wrong: 'The model fails, the agent falls back to deterministic logic, and no one notices until quality or cost metrics drift. You lose the ability to distinguish model problems from orchestration problems.', 
-      keywords: '<span class="keyword-title">Fallback Rate</span>How often the AI fails to answer and the system automatically switches to a safe, pre-programmed backup response.<br><br><span class="keyword-title">OpenTelemetry</span>An open-source standard for tracking how a user request travels through different pieces of code and microservices.' },
-      
-    { id: 'quality', x: 700, y: 100, w: 160, h: 70, color: 'var(--color-quality)', title: 'Semantic Quality', sub: 'Trust & Safety', type: 'Layer 4', 
-      desc: 'Groundedness, hallucination rate, honesty/alignment signals, and validation outcomes from evaluators.', 
-      matters: 'This is the only layer that tells you whether the system is actually safe and useful for the user.',
-      wrong: 'Latency looks perfect, hardware is fine, error rates are low… and the agent is confidently producing incorrect or unsafe answers. User trust erodes quietly without setting off standard alarms.', 
-      keywords: '<span class="keyword-title">Groundedness</span>A score of whether the AI\'s answer is strictly based on the provided company facts, without making things up.<br><br><span class="keyword-title">Hallucination</span>When the AI confidently generates false, fictional, or illogical information and presents it as absolute fact.' }
-  ];
+  const DATA = {
+    traffic: {
+      id: 'traffic', x: 25, y: 50, w: 190, h: 80, color: 'var(--color-traffic)',
+      title: '1. Traffic & Latency', sub: 'gen_ai.server.* / client.*',
+      metrics: [
+        {
+          id: 'ttft',
+          name: 'Time-To-First-Token (TTFT)',
+          instrument: 'Histogram: gen_ai.server.time_to_first_token (unit: s)',
+          desc: 'Measures the elapsed time in seconds between request arrival at the model server and the generation of the very first output token.',
+          why: 'Directly captures prefill latency and queuing delay, which govern how responsive streaming AI feels to the end user.',
+          issue: 'Rising TTFT while inter-token latency (TPOT) stays flat pinpoints prefill compute saturation or bloated RAG prompt contexts.',
+          refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md',
+          refLabel: 'semantic-conventions-genai/docs/gen-ai/gen-ai-metrics.md',
+          collectorYaml: `# OTel Collector: Enforce official GenAI TTFT histogram buckets (0.001s to 10s)
+# Ref: open-telemetry/semantic-conventions-genai (gen_ai.server.time_to_first_token)
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: "0.0.0.0:4317" }
 
+processors:
+  transform/genai_ttft:
+    metric_statements:
+      - context: datapoint
+        conditions:
+          - metric.name == "gen_ai.server.time_to_first_token"
+        statements:
+          - set(attributes["gen_ai.operation.name"], "chat")
+          - set(attributes["gen_ai.provider.name"], "vllm")
+
+exporters:
+  otlphttp/prometheus:
+    endpoint: "http://prometheus-server:9090/api/v1/otlp"`,
+          sdkCode: `# Python OTel SDK: Recording official gen_ai.server.time_to_first_token
+from opentelemetry import metrics
+
+meter = metrics.get_meter("otel.semconv.genai.server", "1.42.0")
+
+ttft_histogram = meter.create_histogram(
+    name="gen_ai.server.time_to_first_token",
+    description="Time to generate the first token of the response",
+    unit="s",
+    explicit_bucket_boundaries_advisory=[
+        0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0
+    ],
+)
+
+# Record measurement on first streaming chunk
+ttft_histogram.record(
+    0.142,
+    attributes={
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o",
+        "server.address": "api.openai.com"
+    }
+)`
+        },
+        {
+          id: 'queue_depth',
+          name: 'Queue Depth & Request Duration',
+          instrument: 'Gauge: vllm:num_requests_waiting | Histogram: gen_ai.server.request.duration (unit: s)',
+          desc: 'Tracks the number of concurrent inference requests waiting in the scheduler queue before KV-cache allocation.',
+          why: 'Reveals concurrency saturation at the model router before timeouts occur.',
+          issue: 'High end-to-end latency with normal GPU compute speeds proves requests are bottlenecked waiting for a batch slot in the queue.',
+          refUrl: 'https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver',
+          refLabel: 'opentelemetry-collector-contrib/receiver/prometheusreceiver',
+          collectorYaml: `# OTel Collector: Scrape vLLM / TGI inference queue depth via Prometheus Receiver
+receivers:
+  prometheus/vllm_queue:
+    config:
+      scrape_configs:
+        - job_name: "genai-inference-scheduler"
+          scrape_interval: 5s
+          static_configs:
+            - targets: ["vllm-inference-svc.genai.svc.cluster.local:8000"]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "(vllm:num_requests_waiting|vllm:time_in_queue_requests|gen_ai_server_request_duration_seconds.*)"
+              action: keep`,
+          sdkCode: `# Client-side end-to-end duration using official GenAI Semantic Conventions
+from opentelemetry import metrics
+
+meter = metrics.get_meter("otel.semconv.genai.client", "1.42.0")
+
+duration_hist = meter.create_histogram(
+    name="gen_ai.client.operation.duration",
+    description="GenAI operation duration",
+    unit="s",
+    explicit_bucket_boundaries_advisory=[
+        0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92
+    ],
+)
+
+duration_hist.record(
+    3.84,
+    attributes={
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "vllm",
+        "gen_ai.request.model": "meta-llama/Llama-3.3-70B-Instruct",
+        "error.type": "timeout" # Conditionally required if operation failed
+    }
+)`
+        }
+      ]
+    },
+    hardware: {
+      id: 'hardware', x: 250, y: 50, w: 190, h: 80, color: 'var(--color-hw)',
+      title: '2. Hardware Saturation', sub: 'hw.gpu.* / DCGM',
+      metrics: [
+        {
+          id: 'vram',
+          name: 'GPU VRAM Usage & Utilization',
+          instrument: 'UpDownCounter: hw.gpu.memory.usage (By) | Gauge: hw.gpu.memory.utilization (1)',
+          desc: 'Monitors physical high-bandwidth GPU memory consumed by LLM weights and dynamically growing KV-cache.',
+          why: 'Token generation throughput collapses immediately if KV-cache exceeds physical VRAM and swaps to host RAM/PCIe.',
+          issue: 'Identifies KV-cache memory leaks, batch-size misconfigurations, or imminent CUDA Out-Of-Memory (OOM) pod evictions.',
+          refUrl: 'https://opentelemetry.io/docs/specs/semconv/hardware/gpu/',
+          refLabel: 'opentelemetry.io/docs/specs/semconv/hardware/gpu/',
+          collectorYaml: `# OTel Collector: Scrape NVIDIA DCGM Exporter & transform to OTel hw.gpu.* conventions
+# Note: hostmetrics does not include GPU; use prometheus receiver against dcgm-exporter
+receivers:
+  prometheus/dcgm:
+    config:
+      scrape_configs:
+        - job_name: "nvidia-dcgm-exporter"
+          scrape_interval: 10s
+          static_configs:
+            - targets: ["dcgm-exporter.gpu-operator.svc:9400"]
+
+processors:
+  metricstransform/hw_semconv:
+    transforms:
+      - include: "DCGM_FI_DEV_FB_USED"
+        action: update
+        new_name: "hw.gpu.memory.usage"
+      - include: "DCGM_FI_DEV_GPU_UTIL"
+        action: update
+        new_name: "hw.gpu.utilization"`,
+          sdkCode: `# Kubernetes Pod Spec: Expose NVIDIA DCGM metrics to OTel Collector DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-dcgm-exporter
+  namespace: gpu-observability
+spec:
+  template:
+    spec:
+      containers:
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.8-3.6.0-ubuntu22.04
+          ports:
+            - name: "metrics"
+              containerPort: 9400
+          securityContext:
+            runAsNonRoot: false
+            capabilities:
+              add: ["SYS_ADMIN"]`
+        },
+        {
+          id: 'thermal',
+          name: 'Thermal Throttling & HW Errors',
+          instrument: 'Gauge: DCGM_FI_DEV_GPU_TEMP | Counter: hw.errors (hw.type="gpu")',
+          desc: 'Captures GPU die temperature, power-cap clock throttling reasons, and ECC memory errors.',
+          why: 'GPUs silently downclock their SM frequency when hitting thermal or power limits, cutting token/sec speed without throwing software errors.',
+          issue: 'Prevents engineering teams from wasting weeks optimizing prompts when the root cause is a degraded chassis fan or power cap.',
+          refUrl: 'https://opentelemetry.io/docs/specs/semconv/hardware/gpu/',
+          refLabel: 'opentelemetry.io/docs/specs/semconv/hardware/gpu/#metric-hwerrors-gpu',
+          collectorYaml: `# OTel Collector: Filter & alert on GPU Thermal Slowdown & XID Hardware Errors
+receivers:
+  prometheus/dcgm_health:
+    config:
+      scrape_configs:
+        - job_name: "dcgm-thermal-and-xid"
+          static_configs:
+            - targets: ["dcgm-exporter.gpu-operator.svc:9400"]
+          metric_relabel_configs:
+            - source_labels: [__name__]
+              regex: "(DCGM_FI_DEV_GPU_TEMP|DCGM_FI_DEV_CLOCK_THROTTLE_REASONS|DCGM_FI_DEV_XID_ERRORS)"
+              action: keep`,
+          sdkCode: `# OTel Semantic Convention Attributes for hw.errors (GPU)
+# Ref: https://opentelemetry.io/docs/specs/semconv/hardware/gpu/
+{
+  "metric.name": "hw.errors",
+  "instrument": "Counter",
+  "unit": "{error}",
+  "attributes": {
+    "hw.id": "GPU-44b8f12c-9a01-...",
+    "hw.type": "gpu",
+    "hw.vendor": "NVIDIA",
+    "hw.model": "NVIDIA H100 80GB HBM3",
+    "hw.error_type": "thermal_throttle_slowdown",
+    "hw.parent": "node-gpu-worker-04"
+  }
+}`
+        }
+      ]
+    },
+    app: {
+      id: 'app', x: 475, y: 50, w: 190, h: 80, color: 'var(--color-app)',
+      title: '3. App-Side Reliability', sub: 'invoke_agent / token.usage',
+      metrics: [
+        {
+          id: 'tokens',
+          name: 'Token Usage (Input / Output)',
+          instrument: 'Histogram: gen_ai.client.token.usage (unit: {token})',
+          desc: 'Records per-request prompt (`input`) and completion (`output`) token consumption across models and agents.',
+          why: 'LLM billing and context window limits scale strictly per token rather than per HTTP call.',
+          issue: 'Detects runaway multi-agent retry loops, un-truncated chat histories, and cost spikes per tenant.',
+          refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-token-metrics.md',
+          refLabel: 'semantic-conventions-genai/docs/gen-ai/gen-ai-token-metrics.md',
+          collectorYaml: `# OTel Collector: Route & aggregate gen_ai.client.token.usage by model and token type
+processors:
+  attributes/genai_tokens:
+    actions:
+      - key: gen_ai.provider.name
+        action: upsert
+        value: "openai"
+      # Migrate legacy llm.usage.prompt_tokens if old SDKs are present:
+      - key: gen_ai.usage.input_tokens
+        from_attribute: llm.usage.prompt_tokens
+        action: insert
+
+  batch:
+    send_batch_size: 1024
+    timeout: 2s`,
+          sdkCode: `# Zero-code Auto-Instrumentation via openinference / opentelemetry-instrumentation-openai
+# pip install opentelemetry-instrumentation-openai
+from opentelemetry.instrumentation.openai import OpenAIInstrumentor
+from openai import OpenAI
+
+# Automatically emits Span: "chat gpt-4o" + Metric: "gen_ai.client.token.usage"
+# Span Attributes: gen_ai.usage.input_tokens, gen_ai.usage.output_tokens
+OpenAIInstrumentor().instrument()
+
+client = OpenAI()
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Summarize network alarm 704"}]
+)`
+        },
+        {
+          id: 'fallback',
+          name: 'Agent Orchestration & Fallbacks',
+          instrument: 'Span: invoke_agent {gen_ai.agent.name} | Attr: error.type',
+          desc: 'Traces multi-step agent execution, tool calls (`execute_tool`), and exception fallbacks across orchestration frameworks.',
+          why: 'An HTTP 200 response from your API often hides the fact that the LLM timed out and served a degraded static fallback.',
+          issue: 'Separates core LLM model failures from broken downstream tool APIs or schema parsing errors.',
+          refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-agent-spans.md',
+          refLabel: 'semantic-conventions-genai/docs/gen-ai/gen-ai-agent-spans.md',
+          collectorYaml: `# OTel Collector: Tail-sample 100% of Agent traces where error.type or fallback occurred
+processors:
+  tail_sampling:
+    decision_wait: 10s
+    policies:
+      - name: capture-agent-errors-and-fallbacks
+        type: string_attribute
+        string_attribute:
+          key: error.type
+          values: ["rate_limit_exceeded", "tool_execution_error", "fallback_triggered"]
+      - name: capture-slow-agents
+        type: latency
+        latency: { threshold_ms: 5000 }`,
+          sdkCode: `# Python OTel SDK: Official GenAI Agent & Tool Span Conventions
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
+tracer = trace.get_tracer("otel.semconv.genai.agents", "1.42.0")
+
+with tracer.start_as_current_span("invoke_agent incident_triager", kind=SpanKind.INTERNAL) as span:
+    span.set_attribute("gen_ai.operation.name", "invoke_agent")
+    span.set_attribute("gen_ai.agent.name", "incident_triager")
+    span.set_attribute("gen_ai.agent.id", "agent-triage-v2")
+    try:
+        run_llm_tool_call()
+    except TimeoutError:
+        span.set_attribute("error.type", "fallback_triggered")
+        span.set_status(Status(StatusCode.ERROR, "LLM timed out; served static runbook"))`
+        }
+      ]
+    },
+    quality: {
+      id: 'quality', x: 700, y: 50, w: 195, h: 80, color: 'var(--color-quality)',
+      title: '4. Semantic Quality', sub: 'gen_ai.evaluation.result',
+      metrics: [
+        {
+          id: 'groundedness',
+          name: 'Groundedness & Faithfulness',
+          instrument: 'Event: gen_ai.evaluation.result (gen_ai.evaluation.name="groundedness")',
+          desc: 'Records an asynchronous evaluator score verifying whether the model response is strictly supported by retrieved RAG context.',
+          why: 'Infrastructure metrics can be 100% green while the assistant fabricates policy or technical details.',
+          issue: 'Flags vector retrieval drift, broken chunking strategies, or overly permissive system prompts.',
+          refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-events.md',
+          refLabel: 'semantic-conventions-genai/docs/gen-ai/gen-ai-events.md',
+          collectorYaml: `# OTel Collector: Route gen_ai.evaluation.result events to analytics sink
+processors:
+  filter/eval_events:
+    logs:
+      include:
+        match_type: strict
+        record_attributes:
+          - key: event.name
+            value: "gen_ai.evaluation.result"
+
+service:
+  pipelines:
+    logs/evaluations:
+      receivers: [otlp]
+      processors: [filter/eval_events, batch]
+      exporters: [otlp/elastic]`,
+          sdkCode: `# Python OTel Events API: Emitting official gen_ai.evaluation.result event
+# Parented via TraceContext to the original "chat" inference span
+from opentelemetry._events import get_event_logger, Event
+
+event_logger = get_event_logger("otel.semconv.genai.eval", "1.42.0")
+
+event_logger.emit(
+    Event(
+        name="gen_ai.evaluation.result",
+        body="RAG groundedness check completed",
+        attributes={
+            "gen_ai.evaluation.name": "groundedness",
+            "gen_ai.evaluation.score.value": 0.94,
+            "gen_ai.evaluation.score.label": "faithful",
+            "gen_ai.evaluation.explanation": "All claims verified against chunk IDs [doc_14, doc_19].",
+            "gen_ai.response.id": "chatcmpl-9f82a1b"
+        },
+    )
+)`
+        },
+        {
+          id: 'hallucination',
+          name: 'Hallucination & Safety Guardrails',
+          instrument: 'Event: gen_ai.evaluation.result (gen_ai.evaluation.score.label)',
+          desc: 'Captures binary pass/fail verdicts and numerical scores from LLM-as-a-Judge or guardrail evaluators.',
+          why: 'Provides continuous production auditability without blocking the real-time user response stream.',
+          issue: 'Detects prompt injection bypasses, toxic completions, or ungrounded hallucinations on specific user cohorts.',
+          refUrl: 'https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-events.md',
+          refLabel: 'semantic-conventions-genai/docs/gen-ai/gen-ai-events.md',
+          collectorYaml: `# OTel Collector: Redact sensitive prompt content in gen_ai.content.* events before storage
+processors:
+  transform/redact_prompts:
+    log_statements:
+      - context: log
+        conditions:
+          - attributes["event.name"] == "gen_ai.evaluation.result"
+        statements:
+          - replace_pattern(attributes["gen_ai.evaluation.explanation"], "\\\\b\\\\d{3}-\\\\d{2}-\\\\d{4}\\\\b", "[REDACTED]")`,
+          sdkCode: `# Emitting a failed Hallucination Evaluation tied to the original trace span
+from opentelemetry._events import get_event_logger, Event
+
+event_logger = get_event_logger("otel.semconv.genai.eval", "1.42.0")
+
+event_logger.emit(
+    Event(
+        name="gen_ai.evaluation.result",
+        attributes={
+            "gen_ai.evaluation.name": "hallucination",
+            "gen_ai.evaluation.score.value": 0.18,
+            "gen_ai.evaluation.score.label": "hallucinated",
+            "gen_ai.evaluation.explanation": "Model invented non-existent CLI flag --force-sync.",
+            "error.type": "semantic_validation_failed"
+        },
+    )
+)`
+        }
+      ]
+    }
+  };
+
+  const NODES = Object.values(DATA);
   const EDGES = [
-    { from: 'traffic', to: 'hardware', label: 'Requests' },
-    { from: 'hardware', to: 'app', label: 'Processing' },
-    { from: 'app', to: 'quality', label: 'Generation' }
+    { from: 'traffic', to: 'hardware' },
+    { from: 'hardware', to: 'app' },
+    { from: 'app', to: 'quality' }
   ];
 
   const ns = 'http://www.w3.org/2000/svg';
   const nodesLayer = document.getElementById('nodes-layer');
   const edgesLayer = document.getElementById('edges-layer');
   const particlesLayer = document.getElementById('particles-layer');
-  let selectedId = 'traffic';
+  
+  let selectedLayerId = 'traffic';
+  let selectedMetricId = 'ttft';
+  let activeCodeTab = 'collector';
   let particles = [];
 
-  function getPath(n1, n2) {
-    const x1 = n1.x + n1.w;
-    const y1 = n1.y + n1.h / 2;
-    const x2 = n2.x;
-    const y2 = n2.y + n2.h / 2;
-    return `M ${x1} ${y1} L ${x2} ${y2}`;
-  }
-
-  function draw() {
+  function drawDiagram() {
     nodesLayer.innerHTML = '';
     edgesLayer.innerHTML = '';
     
-    // Render Edges
     EDGES.forEach(edge => {
       const n1 = NODES.find(n => n.id === edge.from);
       const n2 = NODES.find(n => n.id === edge.to);
-      const d = getPath(n1, n2);
+      const startX = n1.x + n1.w;
+      const startY = n1.y + n1.h / 2;
+      const endX = n2.x;
+      const endY = n2.y + n2.h / 2;
 
       const path = document.createElementNS(ns, 'path');
-      path.setAttribute('d', d);
+      path.setAttribute('d', `M ${startX} ${startY} L ${endX} ${endY}`);
       path.setAttribute('class', 'edge-path');
       path.setAttribute('id', `path-${edge.from}-${edge.to}`);
       path.setAttribute('marker-end', 'url(#arrow)');
       edgesLayer.appendChild(path);
-
-      if (edge.label) {
-        const midX = n1.x + n1.w + (n2.x - (n1.x + n1.w)) / 2;
-        const midY = n1.y + n1.h/2;
-        
-        const bg = document.createElementNS(ns, 'rect');
-        bg.setAttribute('x', midX - 35);
-        bg.setAttribute('y', midY - 10);
-        bg.setAttribute('width', 70);
-        bg.setAttribute('height', 20);
-        bg.setAttribute('class', 'edge-label-bg');
-        edgesLayer.appendChild(bg);
-
-        const text = document.createElementNS(ns, 'text');
-        text.setAttribute('x', midX);
-        text.setAttribute('y', midY + 4);
-        text.setAttribute('class', 'edge-label');
-        text.textContent = edge.label;
-        edgesLayer.appendChild(text);
-      }
     });
 
-    // Render Nodes
     NODES.forEach(n => {
       const g = document.createElementNS(ns, 'g');
-      g.setAttribute('class', `node ${n.id === selectedId ? 'selected' : ''}`);
+      g.setAttribute('class', `node ${n.id === selectedLayerId ? 'selected' : ''}`);
       g.setAttribute('transform', `translate(${n.x}, ${n.y})`);
-      g.onclick = () => selectNode(n.id);
+      g.onclick = () => selectLayer(n.id);
 
       const rect = document.createElementNS(ns, 'rect');
       rect.setAttribute('width', n.w);
       rect.setAttribute('height', n.h);
-      rect.setAttribute('rx', 8);
-      rect.setAttribute('fill', '#ffffff');
+      rect.setAttribute('rx', 10);
+      rect.setAttribute('fill', 'var(--surface-dim)');
       rect.setAttribute('stroke', n.color);
-      rect.setAttribute('stroke-width', '1.5');
+      rect.setAttribute('stroke-width', '1.8');
       
-      const bar = document.createElementNS(ns, 'rect');
-      bar.setAttribute('width', 6);
-      bar.setAttribute('height', n.h);
-      bar.setAttribute('rx', 3);
-      bar.setAttribute('fill', n.color);
-
       const title = document.createElementNS(ns, 'text');
-      title.setAttribute('x', n.w / 2 + 4);
-      title.setAttribute('y', n.h / 2 - 4);
+      title.setAttribute('x', n.w / 2);
+      title.setAttribute('y', n.h / 2 - 5);
       title.setAttribute('class', 'node-text-title');
       title.textContent = n.title;
 
       const sub = document.createElementNS(ns, 'text');
-      sub.setAttribute('x', n.w / 2 + 4);
-      sub.setAttribute('y', n.h / 2 + 14);
+      sub.setAttribute('x', n.w / 2);
+      sub.setAttribute('y', n.h / 2 + 15);
       sub.setAttribute('class', 'node-text-sub');
       sub.textContent = n.sub;
 
       g.appendChild(rect);
-      g.appendChild(bar);
       g.appendChild(title);
       g.appendChild(sub);
       nodesLayer.appendChild(g);
     });
   }
 
-  function selectNode(id) {
-    selectedId = id;
-    draw();
+  function selectLayer(layerId) {
+    selectedLayerId = layerId;
+    drawDiagram();
 
-    const n = NODES.find(node => node.id === id);
-    document.getElementById('d-title').textContent = n.title;
+    const layerData = DATA[layerId];
+    const chipsContainer = document.getElementById('metrics-chips');
+    chipsContainer.innerHTML = '';
+    
+    layerData.metrics.forEach(metric => {
+      const chip = document.createElement('div');
+      chip.className = 'metric-chip';
+      chip.dataset.id = metric.id;
+      chip.textContent = metric.name;
+      chip.onclick = () => selectMetric(layerId, metric.id);
+      chipsContainer.appendChild(chip);
+    });
+
+    selectMetric(layerId, layerData.metrics[0].id);
+  }
+
+  function selectMetric(layerId, metricId) {
+    selectedMetricId = metricId;
+    const layerData = DATA[layerId];
+    const metricData = layerData.metrics.find(m => m.id === metricId);
+
+    const chips = document.getElementById('metrics-chips').children;
+    Array.from(chips).forEach(chip => {
+      if (chip.dataset.id === metricId) {
+        chip.classList.add('active');
+        chip.style.background = layerData.color;
+      } else {
+        chip.classList.remove('active');
+        chip.style.background = 'var(--surface-dim)';
+      }
+    });
+
+    document.getElementById('d-title').textContent = metricData.name;
+    document.getElementById('d-instrument').textContent = metricData.instrument;
     
     const badge = document.getElementById('d-badge');
-    badge.textContent = n.type;
-    badge.style.background = n.color;
+    badge.textContent = layerData.title;
+    badge.style.background = layerData.color;
 
-    document.getElementById('d-desc').innerHTML = `<strong>What it measures:</strong> ${n.desc}`;
-    document.getElementById('d-matters').textContent = n.matters;
-    document.getElementById('d-wrong').textContent = n.wrong;
+    document.getElementById('d-desc').textContent = metricData.desc;
+    document.getElementById('d-matters').textContent = metricData.why;
+    document.getElementById('d-issue').textContent = metricData.issue;
 
-    const keywordContainer = document.getElementById('keyword-container');
-    const keywordBlock = document.getElementById('d-keywords');
-    if (n.keywords) {
-      keywordContainer.style.display = 'block';
-      keywordBlock.innerHTML = n.keywords;
-    } else {
-      keywordContainer.style.display = 'none';
-    }
+    const refLink = document.getElementById('d-ref');
+    refLink.href = metricData.refUrl;
+    refLink.textContent = `OTel Spec: ${metricData.refLabel} ↗`;
+
+    renderCodeBlock();
+  }
+
+  function switchCodeTab(tabName) {
+    activeCodeTab = tabName;
+    document.getElementById('tab-collector').classList.toggle('active', tabName === 'collector');
+    document.getElementById('tab-sdk').classList.toggle('active', tabName === 'sdk');
+    renderCodeBlock();
+  }
+
+  function renderCodeBlock() {
+    const layerData = DATA[selectedLayerId];
+    const metricData = layerData.metrics.find(m => m.id === selectedMetricId);
+    const codeEl = document.getElementById('d-code');
+    codeEl.textContent = activeCodeTab === 'collector' ? metricData.collectorYaml : metricData.sdkCode;
   }
 
   function initParticles() {
     particles = [];
-    EDGES.forEach((edge) => {
+    EDGES.forEach(edge => {
       const pathEl = document.getElementById(`path-${edge.from}-${edge.to}`);
       if (!pathEl) return;
-      
       const len = pathEl.getTotalLength();
       const color = NODES.find(n => n.id === edge.to).color;
       
-      particles.push({ pathEl, len, color, progress: 0, speed: 0.004 });
-      particles.push({ pathEl, len, color, progress: 0.5, speed: 0.004 });
+      particles.push({ pathEl, len, color, progress: 0, speed: 0.005 });
+      particles.push({ pathEl, len, color, progress: 0.5, speed: 0.005 });
     });
   }
 
   function animate() {
     particlesLayer.innerHTML = ''; 
-
     particles.forEach(p => {
       p.progress += p.speed;
       if (p.progress > 1) p.progress = 0;
       
       const pt = p.pathEl.getPointAtLength(p.progress * p.len);
-      
       const circle = document.createElementNS(ns, 'circle');
       circle.setAttribute('cx', pt.x);
       circle.setAttribute('cy', pt.y);
-      circle.setAttribute('r', 4);
+      circle.setAttribute('r', 3.5);
       circle.setAttribute('fill', p.color);
       circle.setAttribute('class', 'particle');
       
-      const opacity = Math.sin(p.progress * Math.PI) * 0.8 + 0.2;
+      const opacity = Math.sin(p.progress * Math.PI) * 0.85 + 0.15;
       circle.setAttribute('opacity', opacity);
       
       particlesLayer.appendChild(circle);
     });
-
     requestAnimationFrame(animate);
   }
 
-  // Startup
-  draw();
+  drawDiagram();
   initParticles();
-  selectNode('traffic');
+  selectLayer('traffic');
   animate();
 </script>
 </body>
